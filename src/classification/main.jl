@@ -45,14 +45,24 @@ function _convert(
     end
 end
 
+function _get_depth(node::treeclassifier.NodeMeta)
+    if node.is_leaf
+        return node.depth
+    end
+    return max(_get_depth(node.l), _get_depth(node.r))
+end
+
 function update_using_impurity!(
-    feature_importance::Vector{Float64}, node::treeclassifier.NodeMeta{S}
+    feature_importance::Matrix{Float64}, node::treeclassifier.NodeMeta{S}
 ) where {S}
     if !node.is_leaf
         update_using_impurity!(feature_importance, node.l)
         update_using_impurity!(feature_importance, node.r)
-        feature_importance[node.feature] +=
-            node.node_impurity - node.l.node_impurity - node.r.node_impurity
+        impurity_decrease = node.node_impurity - node.l.node_impurity - node.r.node_impurity
+        depth_idx = node.depth + 1
+        if depth_idx <= size(feature_importance, 2)
+            feature_importance[node.feature, depth_idx] += impurity_decrease
+        end
     end
     return nothing
 end
@@ -73,8 +83,9 @@ end
 
 function update_pruned_impurity!(
     tree::LeafOrNode{S,T},
-    feature_importance::Vector{Float64},
+    feature_importance::Matrix{Float64},
     ntt::Int,
+    depth::Int,
     loss::Function=util.entropy,
 ) where {S,T}
     all_labels = [tree.left.values; tree.right.values]
@@ -84,14 +95,15 @@ function update_pruned_impurity!(
     nl = length(tree.left.values)
     ncr = votes_distribution(tree.right.values)
     nr = nt - nl
-    feature_importance[tree.featid] -=
+    feature_importance[tree.featid, depth] -=
         (nt * loss(nc, nt) - nl * loss(ncl, nl) - nr * loss(ncr, nr)) / ntt
 end
 
 function update_pruned_impurity!(
     tree::LeafOrNode{S,T},
-    feature_importance::Vector{Float64},
+    feature_importance::Matrix{Float64},
     ntt::Int,
+    depth::Int,
     loss::Function=mean_squared_error,
 ) where {S,T<:AbstractFloat}
     μl = mean(tree.left.values)
@@ -100,7 +112,7 @@ function update_pruned_impurity!(
     nr = length(tree.right.values)
     nt = nl + nr
     μt = (nl * μl + nr * μr) / nt
-    feature_importance[tree.featid] -=
+    feature_importance[tree.featid, depth] -=
         (
             nt * loss([tree.left.values; tree.right.values], repeat([μt], nt)) -
             nl * loss(tree.left.values, repeat([μl], nl)) -
@@ -131,7 +143,9 @@ function build_stump(
         rng,
     )
 
-    return _build_tree(t, labels, size(features, 2), size(features, 1), impurity_importance)
+    return _build_tree(
+        t, labels, size(features, 2), size(features, 1), impurity_importance, 1
+    )
 end
 
 function build_tree(
@@ -146,28 +160,31 @@ function build_tree(
     rng=Random.GLOBAL_RNG,
     impurity_importance::Bool=true,
 ) where {S,T}
-    if max_depth == -1
-        max_depth = typemax(Int)
+    if max_depth < -1
+        throw(ArgumentError("max_depth must be >= -1"))
     end
     if n_subfeatures == 0
         n_subfeatures = size(features, 2)
     end
 
     rng = mk_rng(rng)::Random.AbstractRNG
+    _max_depth = max_depth == -1 ? typemax(Int) : max_depth
     t = treeclassifier.fit(;
         X=features,
         Y=labels,
         W=nothing,
         loss,
         max_features=Int(n_subfeatures),
-        max_depth=Int(max_depth),
+        max_depth=Int(_max_depth),
         min_samples_leaf=Int(min_samples_leaf),
         min_samples_split=Int(min_samples_split),
         min_purity_increase=Float64(min_purity_increase),
         rng,
     )
 
-    return _build_tree(t, labels, size(features, 2), size(features, 1), impurity_importance)
+    return _build_tree(
+        t, labels, size(features, 2), size(features, 1), impurity_importance, max_depth
+    )
 end
 
 function _build_tree(
@@ -176,12 +193,14 @@ function _build_tree(
     n_features,
     n_samples,
     impurity_importance::Bool,
+    max_depth,
 ) where {S,T}
     node = _convert(tree.root, tree.list, labels[tree.labels])
     if !impurity_importance
-        return Root{S,T}(node, n_features, Float64[])
+        return Root{S,T}(node, n_features, zeros(Float64, 0, 0))
     else
-        fi = zeros(Float64, n_features)
+        depth = max_depth == -1 ? _get_depth(tree.root) : max_depth
+        fi = zeros(Float64, n_features, depth + 1)
         update_using_impurity!(fi, tree.root)
         return Root{S,T}(node, n_features, fi ./ n_samples)
     end
@@ -227,7 +246,10 @@ function prune_tree(
     end
     ntt = nsample(tree)
     function _prune_run_stump(
-        tree::LeafOrNode{S,T}, purity_thresh::Real, fi::Vector{Float64}=Float64[]
+        tree::LeafOrNode{S,T},
+        purity_thresh::Real,
+        fi::Matrix{Float64}=zeros(Float64, 0, 0),
+        depth::Int=1,
     ) where {S,T}
         all_labels = [tree.left.values; tree.right.values]
         majority = majority_vote(all_labels)
@@ -235,7 +257,7 @@ function prune_tree(
         purity = length(matches) / length(all_labels)
         if purity >= purity_thresh
             if !isempty(fi)
-                update_pruned_impurity!(tree, fi, ntt, loss)
+                update_pruned_impurity!(tree, fi, ntt, depth, loss)
             end
             return Leaf{T}(majority, all_labels)
         else
@@ -248,16 +270,19 @@ function prune_tree(
         return Root{S,T}(node, tree.n_feat, fi)
     end
     function _prune_run(
-        tree::LeafOrNode{S,T}, purity_thresh::Real, fi::Vector{Float64}=Float64[]
+        tree::LeafOrNode{S,T},
+        purity_thresh::Real,
+        fi::Matrix{Float64}=zeros(Float64, 0, 0),
+        depth::Int=1,
     ) where {S,T}
         N = length(tree)
         if N == 1        ## a Leaf
             return tree
         elseif N == 2    ## a stump
-            return _prune_run_stump(tree, purity_thresh, fi)
+            return _prune_run_stump(tree, purity_thresh, fi, depth)
         else
-            left = _prune_run(tree.left, purity_thresh, fi)
-            right = _prune_run(tree.right, purity_thresh, fi)
+            left = _prune_run(tree.left, purity_thresh, fi, depth + 1)
+            right = _prune_run(tree.right, purity_thresh, fi, depth + 1)
             return Node{S,T}(tree.featid, tree.featval, left, right)
         end
     end
@@ -590,13 +615,20 @@ function _build_forest(
     impurity_importance::Bool,
 ) where {S,T}
     normalized_importance = if !impurity_importance
-        Float64[]
+        zeros(Float64, 0, 0)
     else
-        fi = zeros(Float64, n_features)
+        max_depth = 0
         for tree in forest
-            ti = DecisionTree.impurity_importance(tree; normalize=true)
-            if !isempty(ti)
-                fi .+= ti
+            if hasproperty(tree, :featim) && !isempty(tree.featim)
+                max_depth = max(max_depth, size(tree.featim, 2))
+            end
+        end
+        fi = zeros(Float64, n_features, max_depth)
+        for tree in forest
+            if hasproperty(tree, :featim) && !isempty(tree.featim)
+                ti = tree.featim
+                depth = size(ti, 2)
+                fi[:, 1:depth] .+= ti
             end
         end
         fi ./ n_trees
@@ -708,7 +740,7 @@ function build_adaboost_stumps(
             break
         end
     end
-    return (Ensemble{S,T}(stumps, n_features, Float64[]), coeffs)
+    return (Ensemble{S,T}(stumps, n_features, zeros(Float64, 0, 0)), coeffs)
 end
 
 function apply_adaboost_stumps(

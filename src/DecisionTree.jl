@@ -68,13 +68,13 @@ const LeafOrNode{S,T} = Union{Leaf{T},Node{S,T}}
 struct Root{S,T}
     node::LeafOrNode{S,T}
     n_feat::Int
-    featim::Vector{Float64}   # impurity importance
+    featim::Matrix{Float64}   # impurity importance
 end
 
 struct Ensemble{S,T}
     trees::Vector{LeafOrNode{S,T}}
     n_feat::Int
-    featim::Vector{Float64}
+    featim::Matrix{Float64}
 end
 
 is_leaf(l::Leaf) = true
@@ -86,7 +86,7 @@ function convert(::Type{Node{S,T}}, lf::Leaf{T}) where {S,T}
     Node(0, _zero(S), lf, Leaf(_zero(T), [_zero(T)]))
 end
 function convert(::Type{Root{S,T}}, node::LeafOrNode{S,T}) where {S,T}
-    Root{S,T}(node, 0, Float64[])
+    Root{S,T}(node, 0, zeros(Float64, 0, 0))
 end
 convert(::Type{LeafOrNode{S,T}}, tree::Root{S,T}) where {S,T} = tree.node
 promote_rule(::Type{Node{S,T}}, ::Type{Leaf{T}}) where {S,T} = Node{S,T}
@@ -138,10 +138,22 @@ function Base.vcat(e1::Ensemble{S,T}, e2::Ensemble{S,T}) where {S,T}
     n = n1 + n2
     trees = vcat(e1.trees, e2.trees)
     featim = if isempty(e1.featim) || isempty(e2.featim)
-        Float64[]
+        zeros(Float64, 0, 0)
     else
         e1.n_feat == e2.n_feat || throw(ERR_ENSEMBLE_VCAT)
-        (n1 .* e1.featim + n2 .* e2.featim) ./ n
+        ncols1 = size(e1.featim, 2)
+        ncols2 = size(e2.featim, 2)
+        if ncols1 > ncols2
+            featim2 = hcat(e2.featim, zeros(eltype(e2.featim), e2.n_feat, ncols1 - ncols2))
+            featim1 = e1.featim
+        elseif ncols2 > ncols1
+            featim1 = hcat(e1.featim, zeros(eltype(e1.featim), e1.n_feat, ncols2 - ncols1))
+            featim2 = e2.featim
+        else
+            featim1 = e1.featim
+            featim2 = e2.featim
+        end
+        (n1 .* featim1 + n2 .* featim2) ./ n
     end
     # In the case where impurity importances are being dumped, we continue to propogate
     # the feature count `n_feat` as seen in the second ensemble `e2`, although we are not
@@ -214,7 +226,7 @@ probabilistic prediction for class 7 of `2493/10555`. Ratios for
 non-majority classes are not shown.
 
 # Example output:
-```
+\`\`\`
 Feature 3 < -28.15 ?
 ├─ Feature 2 < -161.0 ?
    ├─ 5 : 842/3650
@@ -222,7 +234,7 @@ Feature 3 < -28.15 ?
 └─ Feature 7 < 108.1 ?
    ├─ 2 : 2434/15287
    └─ 8 : 1227/3508
-```
+\`\`\`
 
 To facilitate visualisation of trees using third party packages, a `DecisionTree.Leaf` object,
 `DecisionTree.Node` object or  `DecisionTree.Root` object can be wrapped to obtain a tree structure implementing the

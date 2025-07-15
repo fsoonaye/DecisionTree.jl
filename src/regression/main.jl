@@ -1,6 +1,16 @@
 include("tree.jl")
 
-function _convert(node::treeregressor.NodeMeta{S}, labels::Array{T}) where {S,T<:AbstractFloat}
+function _get_depth(node::treeregressor.NodeMeta)
+    if node.is_leaf
+        return 0
+    else
+        return 1 + max(_get_depth(node.l), _get_depth(node.r))
+    end
+end
+
+function _convert(
+    node::treeregressor.NodeMeta{S}, labels::Array{T}
+) where {S,T<:AbstractFloat}
     if node.is_leaf
         return Leaf{T}(node.label, labels[node.region])
     else
@@ -11,13 +21,15 @@ function _convert(node::treeregressor.NodeMeta{S}, labels::Array{T}) where {S,T<
 end
 
 function update_using_impurity!(
-    feature_importance::Vector{Float64}, node::treeregressor.NodeMeta{S}
+    feature_importance::Matrix{Float64}, node::treeregressor.NodeMeta{S}, depth::Int
 ) where {S}
     if !node.is_leaf
-        update_using_impurity!(feature_importance, node.l)
-        update_using_impurity!(feature_importance, node.r)
-        feature_importance[node.feature] +=
-            node.node_impurity - node.l.node_impurity - node.r.node_impurity
+        if depth <= size(feature_importance, 2)
+            feature_importance[node.feature, depth] +=
+                node.node_impurity - node.l.node_impurity - node.r.node_impurity
+        end
+        update_using_impurity!(feature_importance, node.l, depth + 1)
+        update_using_impurity!(feature_importance, node.r, depth + 1)
     end
     return nothing
 end
@@ -65,10 +77,17 @@ function build_tree(
     node = _convert(t.root, labels[t.labels])
     n_features = size(features, 2)
     if !impurity_importance
-        return Root{S,T}(node, n_features, Float64[])
+        return Root{S,T}(node, n_features, zeros(Float64, 0, 0))
     else
-        fi = zeros(Float64, n_features)
-        update_using_impurity!(fi, t.root)
+        fi_depth = max_depth
+        if fi_depth == typemax(Int)
+            fi_depth = _get_depth(t.root)
+        end
+        if fi_depth == 0
+            fi_depth = 1
+        end
+        fi = zeros(Float64, n_features, fi_depth)
+        update_using_impurity!(fi, t.root, 1)
         return Root{S,T}(node, n_features, fi ./ size(features, 1))
     end
 end
@@ -139,6 +158,25 @@ function build_forest(
                 min_purity_increase;
                 impurity_importance,
             )
+        end
+    end
+
+    if impurity_importance
+        max_ncols = 0
+        for root in forest
+            max_ncols = max(max_ncols, size(root.featim, 2))
+        end
+
+        for i in 1:length(forest)
+            root = forest[i]
+            current_ncols = size(root.featim, 2)
+            if current_ncols < max_ncols
+                padded_featim = hcat(
+                    root.featim,
+                    zeros(eltype(root.featim), root.n_feat, max_ncols - current_ncols),
+                )
+                forest[i] = Root(root.node, root.n_feat, padded_featim)
+            end
         end
     end
 
