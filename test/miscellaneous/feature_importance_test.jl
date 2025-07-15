@@ -29,17 +29,23 @@
     entropy2 = -(5 * log(5 / 15) + 10 * log(10 / 15)) / 20
     entropy3 = -(5 * log(5 / 7) + 2 * log(2 / 7)) / 20
     @test isapprox(
-        impurity_importance(model), [entropy1 - entropy2, entropy2 - entropy3, entropy3]
+        vec(sum(impurity_importance(model); dims=2)),
+        [entropy1 - entropy2, entropy2 - entropy3, entropy3],
     )
     @test split_importance(model) == [1, 1, 1]
 
     # prune_tree
     pt = prune_tree(model, 0.7)
-    @test isapprox(impurity_importance(pt), [entropy1 - entropy2, entropy2 - entropy3, 0])
+    @test isapprox(
+        vec(sum(impurity_importance(pt); dims=2)),
+        [entropy1 - entropy2, entropy2 - entropy3, 0.0],
+    )
     @test split_importance(pt) == [1, 1, 0]
 
     pt = prune_tree(model, 0.6)
-    @test isapprox(impurity_importance(pt), [entropy1 - entropy2, 0, 0])
+    @test isapprox(
+        vec(sum(impurity_importance(pt); dims=2)), [entropy1 - entropy2, 0.0, 0.0]
+    )
     @test split_importance(pt) == [1, 0, 0]
 
     # regressor
@@ -47,16 +53,20 @@
     mse1 = ((1^2 * 10 + 0^2 * 10) / 20 - ((1 * 10 + 0 * 10) / 20)^2)
     mse2 = ((1^2 * 10 + 0^2 * 5) / 15 - ((1 * 10 + 0 * 5) / 15)^2) * 15 / 20
     mse3 = ((1^2 * 2 + 0^2 * 5) / 7 - ((1 * 2 + 0 * 5) / 7)^2) * 7 / 20
-    @test isapprox(impurity_importance(model), [mse1 - mse2, mse2 - mse3, mse3])
+    @test isapprox(
+        vec(sum(impurity_importance(model); dims=2)), [mse1 - mse2, mse2 - mse3, mse3]
+    )
     @test split_importance(model) == [1, 1, 1]
 
     # prune_tree
     pt = prune_tree(model, 0.7)
-    @test isapprox(impurity_importance(pt), [mse1 - mse2, mse2 - mse3, 0])
+    @test isapprox(
+        vec(sum(impurity_importance(pt); dims=2)), [mse1 - mse2, mse2 - mse3, 0.0]
+    )
     @test split_importance(pt) == [1, 1, 0]
 
     pt = prune_tree(model, 0.6)
-    @test isapprox(impurity_importance(pt), [mse1 - mse2, 0, 0])
+    @test isapprox(vec(sum(impurity_importance(pt); dims=2)), [mse1 - mse2, 0.0, 0.0])
     @test split_importance(pt) == [1, 0, 0]
 
     # Increase samples for testing permutation_importance and ensemble models
@@ -74,7 +84,8 @@
         rng=StableRNG(1),
     )
     @test similarity(
-        impurity_importance(model), [entropy1 - entropy2, entropy2 - entropy3, entropy3]
+        vec(sum(impurity_importance(model); dims=2)),
+        [entropy1 - entropy2, entropy2 - entropy3, entropy3],
     ) > 0.9
     @test similarity(split_importance(model), [1, 1, 1]) > 0.9
     @test argmax(p1.mean) == 1
@@ -104,7 +115,7 @@
     )
     @test argmin(p1.mean) == argmin(p2.mean)
     @test (-(sort(p1.mean; rev=true)[1:2]...) - -(sort(p2.mean; rev=true)[1:2]...)) < 0.2
-    @test similarity(i1, i2) > 0.9
+    @test similarity(vec(sum(i1; dims=2)), vec(sum(i2; dims=2))) > 0.9
     @test similarity(s1, s2) > 0.9
 
     model, coeffs = build_adaboost_stumps(y2, X2, 20; rng=StableRNG(1))
@@ -137,7 +148,9 @@
     p1 = permutation_importance(
         model, y2, X2, (model, y, X) -> R2(y, apply_tree(model, X)), 10; rng=StableRNG(1)
     )
-    @test similarity(impurity_importance(model), [mse1 - mse2, mse2 - mse3, mse3]) > 0.9
+    @test similarity(
+        vec(sum(impurity_importance(model); dims=2)), [mse1 - mse2, mse2 - mse3, mse3]
+    ) > 0.9
     @test similarity(split_importance(model), [1, 1, 1]) > 0.9
     @test argmax(p1.mean) == 1
     @test argmin(p1.mean) == 3
@@ -161,7 +174,7 @@
     )
     @test argmax(p1.mean) == argmax(p2.mean)
     @test argmin(p1.mean) == argmin(p2.mean)
-    @test similarity(i1, i2) > 0.9
+    @test similarity(vec(sum(i1; dims=2)), vec(sum(i2; dims=2))) > 0.9
     @test similarity(s1, s2) > 0.9
 
     # Common datasets
@@ -173,7 +186,7 @@
     # model = DecisionTreeClassifier(max_depth = 3, criterion = 'entropy', random_state = 1)
     # model.fit(X, y)
     @test isapprox(
-        filter(x -> >(x, 0), impurity_importance(model; normalize=true)),
+        filter(x -> >(x, 0), vec(sum(impurity_importance(model; normalize=true); dims=2))),
         [0.11896482, 0.15168659, 0.17920925, 0.29679316, 0.11104555, 0.14230064],
         atol=0.0000005,
     )
@@ -184,7 +197,7 @@
     # model = DecisionTreeRegressor(max_depth = 3, random_state = 1)
     # model.fit(X, y)
     @test isapprox(
-        filter(x -> >(x, 0), impurity_importance(model; normalize=true)),
+        filter(x -> >(x, 0), vec(sum(impurity_importance(model; normalize=true); dims=2))),
         [0.1983883, 0.02315617, 0.09821539, 0.06591425, 0.19884457, 0.14939765, 0.26608367],
         atol=0.0000005,
     )
@@ -197,7 +210,7 @@
     # sklearn:
     # model = RandomForestClassifier(n_estimators = 100, max_depth = 2, random_state = 100, criterion = 'entropy')
     # model.fit(X, y)
-    f1 = impurity_importance(model)
+    f1 = vec(sum(impurity_importance(model); dims=2))
     @test sum(f1[1:2]) < 0.25 # About 0.1% will fail among different rng
     @test abs(f1[4] - f1[3]) < 0.35 # About 1% will fail among different rng
 
@@ -215,7 +228,7 @@
     # sklearn:
     # model = RandomForestRegressor(n_estimators = 100, max_depth = 2, random_state = 100)
     # model.fit(X, y)
-    f1 = impurity_importance(model)
+    f1 = vec(sum(impurity_importance(model); dims=2))
     @test sum(f1[1:2]) < 0.1             # Very Stable
 
     X = X[:, 1:3] # leave only one important feature
@@ -224,7 +237,7 @@
     # sklearn:
     # model = RandomForestClassifier(n_estimators = 100, max_depth = 2, random_state = 100, criterion = 'entropy')
     # model.fit(X, y)
-    f1 = impurity_importance(model)
+    f1 = vec(sum(impurity_importance(model); dims=2))
     @test argmax(f1) == 3
 
     model, coeffs = build_adaboost_stumps(y, X, 10; rng=StableRNG(1))
@@ -239,6 +252,6 @@
     # sklearn:
     # model = RandomForestRegressor(n_estimators = 100, max_depth = 2, random_state = 100)
     # model.fit(X, y)
-    f1 = impurity_importance(model)
+    f1 = vec(sum(impurity_importance(model); dims=2))
     @test sum(f1[1:2]) < 0.1  # Very Stable
 end

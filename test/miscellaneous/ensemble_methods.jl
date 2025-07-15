@@ -16,15 +16,24 @@
     n1 = length(ensemble1.trees)
     n2 = length(ensemble2.trees)
     n = n1 + n2
-    @test n * ensemble.featim ≈ n1 * ensemble1.featim + n2 * ensemble2.featim
+    featim1 = ensemble1.featim
+    featim2 = ensemble2.featim
+    ncols1 = size(featim1, 2)
+    ncols2 = size(featim2, 2)
+    if ncols1 > ncols2
+        featim2 = hcat(featim2, zeros(eltype(featim2), size(featim2, 1), ncols1 - ncols2))
+    elseif ncols2 > ncols1
+        featim1 = hcat(featim1, zeros(eltype(featim1), size(featim1, 1), ncols2 - ncols1))
+    end
+    @test n * ensemble.featim ≈ n1 * featim1 + n2 * featim2
 
     # including an ensemble without impurity importance should drop impurity importance from
     # the combination:
     ensemble3 = build_forest(labels, features, 2, 4; impurity_importance=false)
     @test !DecisionTree.has_impurity_importance(ensemble3)
-    @test vcat(ensemble1, ensemble3).featim == Float64[]
-    @test vcat(ensemble3, ensemble1).featim == Float64[]
-    @test vcat(ensemble3, ensemble3).featim == Float64[]
+    @test vcat(ensemble1, ensemble3).featim == zeros(Float64, 0, 0)
+    @test vcat(ensemble3, ensemble1).featim == zeros(Float64, 0, 0)
+    @test vcat(ensemble3, ensemble3).featim == zeros(Float64, 0, 0)
 
     # changing the number of features:
     ensemble4 = build_forest(labels, features[:, 1:3], 2, 4)

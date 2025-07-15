@@ -48,7 +48,7 @@
         ).mean
 
     @test similarity(p2, p2) > 0.8
-    @test similarity(f1, f2) < 0.8
+    @test similarity(vec(sum(f1; dims=2)), f2) < 0.8
 
     println("\n##### 3 foldCV Classification Tree #####")
     pruning_purity = 0.9

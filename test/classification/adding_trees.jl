@@ -28,6 +28,6 @@ classes = unique(labels)
     @test issubset(unique(apply_forest(two_step_model, features)), classes)
 
     # smoke test - one-step and two-step models predict the same feature rankings:
-    @test rank(impurity_importance(one_step_model)) ==
-        rank(impurity_importance(two_step_model))
+    @test rank(vec(sum(impurity_importance(one_step_model); dims=2))) ==
+        rank(vec(sum(impurity_importance(two_step_model); dims=2)))
 end

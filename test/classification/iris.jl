@@ -39,7 +39,10 @@
     @test 0.99 < cm.accuracy < 1.0
     i2 = impurity_importance(pt)
     s2 = split_importance(pt)
-    @test isapprox(i2, i1 .+ [0, 0, 0, (47 * log(47 / 48) + log(1 / 48)) / 150])
+    @test isapprox(
+        sum(i2; dims=2),
+        sum(i1; dims=2) .+ [0, 0, 0, (47 * log(47 / 48) + log(1 / 48)) / 150],
+    )
     @test s1 == s2 .+ [0, 0, 0, 1]
 
     # prune tree to 3 leaves
