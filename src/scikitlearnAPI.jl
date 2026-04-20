@@ -274,6 +274,7 @@ mutable struct RandomForestClassifier <: BaseClassifier
     min_purity_increase::Float64
     rng::Union{Random.AbstractRNG,Int}
     impurity_importance::Bool
+    feature_sampler::Any
     ensemble::Union{Ensemble,Nothing}
     classes::Union{Vector,Nothing}
     function RandomForestClassifier(;
@@ -286,6 +287,7 @@ mutable struct RandomForestClassifier <: BaseClassifier
         min_purity_increase=0.0,
         rng=Random.GLOBAL_RNG,
         impurity_importance=true,
+        feature_sampler=nothing,
         ensemble=nothing,
         classes=nothing,
     )
@@ -299,6 +301,7 @@ mutable struct RandomForestClassifier <: BaseClassifier
             min_purity_increase,
             rng,
             impurity_importance,
+            feature_sampler,
             ensemble,
             classes,
         )
@@ -335,6 +338,7 @@ function fit!(rf::RandomForestClassifier, X::AbstractMatrix, y::AbstractVector)
         rf.min_purity_increase;
         rng=rf.rng,
         impurity_importance=rf.impurity_importance,
+        feature_sampler=rf.feature_sampler,
     )
     rf.classes = sort(unique(y))
     rf
@@ -400,6 +404,7 @@ mutable struct RandomForestRegressor <: BaseRegressor
     min_purity_increase::Float64
     rng::Union{Random.AbstractRNG,Int}
     impurity_importance::Bool
+    feature_sampler::Any
     ensemble::Union{Ensemble,Nothing}
     function RandomForestRegressor(;
         n_subfeatures=-1,
@@ -411,6 +416,7 @@ mutable struct RandomForestRegressor <: BaseRegressor
         min_purity_increase=0.0,
         rng=Random.GLOBAL_RNG,
         impurity_importance=true,
+        feature_sampler=nothing,
         ensemble=nothing,
     )
         new(
@@ -423,6 +429,7 @@ mutable struct RandomForestRegressor <: BaseRegressor
             min_purity_increase,
             rng,
             impurity_importance,
+            feature_sampler,
             ensemble,
         )
     end
@@ -459,6 +466,7 @@ function fit!(rf::RandomForestRegressor, X::AbstractMatrix, y::AbstractVector)
         rf.min_purity_increase;
         rng=rf.rng,
         impurity_importance=rf.impurity_importance,
+        feature_sampler=rf.feature_sampler,
     )
     rf
 end

@@ -38,6 +38,17 @@ function _convert(
 ) where {S,T}
     if node.is_leaf
         return Leaf{T}(list[node.label], labels[node.region])
+    elseif node.feature == 0
+        # Pass-through node: data child goes on left so apply_tree (featid==0 → left) works.
+        # The coin flip already happened in the NodeMeta tree (used for MDI/tree shape).
+        if length(node.l.region) > 0
+            left = _convert(node.l, list, labels)
+            right = _convert(node.r, list, labels)
+        else
+            left = _convert(node.r, list, labels)
+            right = _convert(node.l, list, labels)
+        end
+        return Node{S,T}(0, node.threshold, left, right)
     else
         left = _convert(node.l, list, labels)
         right = _convert(node.r, list, labels)
@@ -58,10 +69,14 @@ function update_using_impurity!(
     if !node.is_leaf
         update_using_impurity!(feature_importance, node.l)
         update_using_impurity!(feature_importance, node.r)
-        impurity_decrease = node.node_impurity - node.l.node_impurity - node.r.node_impurity
-        depth_idx = node.depth + 1
-        if depth_idx <= size(feature_importance, 2)
-            feature_importance[node.feature, depth_idx] += impurity_decrease
+        # Pass-through nodes (feature == 0) contribute zero impurity decrease;
+        # skip to avoid out-of-bounds indexing.
+        if node.feature != 0
+            impurity_decrease = node.node_impurity - node.l.node_impurity - node.r.node_impurity
+            depth_idx = node.depth + 1
+            if depth_idx <= size(feature_importance, 2)
+                feature_importance[node.feature, depth_idx] += impurity_decrease
+            end
         end
     end
     return nothing
@@ -159,6 +174,7 @@ function build_tree(
     loss=util.entropy::Function,
     rng=Random.GLOBAL_RNG,
     impurity_importance::Bool=true,
+    feature_sampler=nothing,
 ) where {S,T}
     if max_depth < -1
         throw(ArgumentError("max_depth must be >= -1"))
@@ -180,6 +196,7 @@ function build_tree(
         min_samples_split=Int(min_samples_split),
         min_purity_increase=Float64(min_purity_increase),
         rng,
+        feature_sampler,
     )
 
     return _build_tree(
@@ -476,6 +493,7 @@ function build_forest(
     min_purity_increase=0.0;
     rng::Union{Integer,AbstractRNG}=Random.GLOBAL_RNG,
     impurity_importance::Bool=true,
+    feature_sampler=nothing,
 ) where {S,T}
     if n_trees < 1
         throw("the number of trees must be >= 1")
@@ -518,6 +536,7 @@ function build_forest(
                 loss,
                 rng=_rng,
                 impurity_importance,
+                feature_sampler,
             )
         end
     else # each thread gets its own seeded rng
@@ -534,6 +553,7 @@ function build_forest(
                 min_purity_increase;
                 loss,
                 impurity_importance,
+                feature_sampler,
             )
         end
     end
@@ -587,6 +607,7 @@ function build_forest(
     features::AbstractMatrix{S},
     options...;
     impurity_importance=true,
+    feature_sampler=nothing,
     kwoptions...,
 ) where {S,T}
 
@@ -601,7 +622,7 @@ function build_forest(
         throw(ERR_CANT_UPDATE_IMPURITY_IMPORTANCE)
     end
     new_forest = build_forest(
-        labels, features, options...; impurity_importance, kwoptions...
+        labels, features, options...; impurity_importance, feature_sampler, kwoptions...
     )
 
     # `model` and `new_forest` are both `Ensemble` objects:
