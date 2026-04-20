@@ -62,6 +62,8 @@ function _split!(
     Yf::AbstractVector{T},
     Wf::AbstractVector{U},
     rng::Random.AbstractRNG,
+    feature_sampler=nothing,  # optional callable: (rng, n_features) -> Vector{Int}
+    _sampled_mask::Union{BitVector,Nothing}=nothing,  # pre-allocated bitmask
 ) where {S,T<:AbstractFloat,U}
     region = node.region
     n_samples = length(region)
@@ -109,23 +111,57 @@ function _split!(
     n_constant = 0
     # true if every feature is constant
     unsplittable = true
-    # the number of non constant features we will see if
-    # only sample n_features used features
-    # is a hypergeometric random variable
     total_features = size(X, 2)
 
-    # this is the total number of features that we expect to not
-    # be one of the known constant features. since we know exactly
-    # what the non constant features are, we can sample at 'non_constants_used'
-    # non constant features instead of going through every feature randomly.
-    non_constants_used = util.hypergeometric(
-        n_features, total_features - n_features, max_features, rng
-    )
-    @inbounds while (unsplittable || indf <= non_constants_used) && indf <= n_features
-        feature = let
-            indr = rand(rng, indf:n_features)
-            features[indf], features[indr] = features[indr], features[indf]
-            features[indf]
+    if feature_sampler !== nothing
+        # Custom feature subsampling: call the user-provided sampler
+        sampled_indices = feature_sampler(rng, total_features)
+        if isempty(sampled_indices)
+            # Pass-through node: no split, but depth increases by 1.
+            # All data goes to left child; _fit will randomly swap children for symmetry.
+            node.feature = 0
+            node.threshold = X[1]  # dummy
+            node.split_at = length(region)
+            return nothing
+        end
+        # Mark sampled features in the pre-allocated bitmask
+        sampled_mask = _sampled_mask
+        fill!(sampled_mask, false)
+        @inbounds for idx in sampled_indices
+            sampled_mask[idx] = true
+        end
+        # Reorder features: put sampled non-constant features at the front
+        non_constants_used = 0
+        @inbounds for i in 1:n_features
+            if sampled_mask[features[i]]
+                non_constants_used += 1
+                features[non_constants_used], features[i] = features[i], features[non_constants_used]
+            end
+        end
+    else
+        # Default: hypergeometric draw for uniform subsampling
+        # the number of non constant features we will see if
+        # only sample n_features used features
+        # is a hypergeometric random variable
+        # this is the total number of features that we expect to not
+        # be one of the known constant features. since we know exactly
+        # what the non constant features are, we can sample at 'non_constants_used'
+        # non constant features instead of going through every feature randomly.
+        non_constants_used = util.hypergeometric(
+            n_features, total_features - n_features, max_features, rng
+        )
+    end
+    # When using a custom sampler, only try the sampled features — no unsplittable guard.
+    # The default path keeps the guard to ensure at least one splittable feature is found.
+    @inbounds while ((feature_sampler === nothing && unsplittable) || indf <= non_constants_used) && indf <= n_features
+        feature = if feature_sampler !== nothing
+            features[indf]  # already selected and reordered
+        else
+            let
+                indr = rand(rng, indf:n_features)
+                features[indf], features[indr] = features[indr], features[indf]
+                features[indf]
+            end
         end
 
         rssq = tssq
@@ -253,12 +289,16 @@ function _fit(
     min_samples_split::Int,
     min_purity_increase::Float64,
     rng=Random.GLOBAL_RNG::Random.AbstractRNG,
+    feature_sampler=nothing,
 ) where {S,T<:AbstractFloat,U}
     n_samples, n_features = size(X)
 
     Yf = Array{T}(undef, n_samples)
     Xf = Array{S}(undef, n_samples)
     Wf = Array{U}(undef, n_samples)
+
+    # Pre-allocate bitmask for custom feature sampling (one alloc per tree)
+    _sampled_mask = feature_sampler !== nothing ? falses(n_features) : nothing
 
     indX = collect(1:n_samples)
     root = NodeMeta{S}(collect(1:n_features), 1:n_samples, 0)
@@ -281,11 +321,25 @@ function _fit(
             Yf,
             Wf,
             rng,
+            feature_sampler,
+            _sampled_mask,
         )
         if !node.is_leaf
             fork!(node)
-            push!(stack, node.r)
-            push!(stack, node.l)
+            # Pass-through: randomly swap children for symmetric tree structure
+            if node.feature == 0 && rand(rng, Bool)
+                node.l, node.r = node.r, node.l
+            end
+            # Push right then left (left processed first due to LIFO stack)
+            for child in (node.r, node.l)
+                if length(child.region) > 0
+                    push!(stack, child)
+                else
+                    # Empty child from pass-through: make it a leaf immediately
+                    child.is_leaf = true
+                    child.label = node.label
+                end
+            end
         end
     end
     return (root, indX)
@@ -301,6 +355,7 @@ function fit(;
     min_samples_split::Int,
     min_purity_increase::Float64,
     rng=Random.GLOBAL_RNG::Random.AbstractRNG,
+    feature_sampler=nothing,
 ) where {S,U}
     n_samples, n_features = size(X)
     if isnothing(W)
@@ -328,6 +383,7 @@ function fit(;
         min_samples_split,
         min_purity_increase,
         rng,
+        feature_sampler,
     )
 
     return Tree{S}(root, indX)

@@ -3,6 +3,16 @@ include("tree.jl")
 function _convert(node::treeregressor.NodeMeta{S}, labels::Array{T}) where {S,T<:AbstractFloat}
     if node.is_leaf
         return Leaf{T}(node.label, labels[node.region])
+    elseif node.feature == 0
+        # Pass-through node: data child goes on left so apply_tree (featid==0 → left) works.
+        if length(node.l.region) > 0
+            left = _convert(node.l, labels)
+            right = _convert(node.r, labels)
+        else
+            left = _convert(node.r, labels)
+            right = _convert(node.l, labels)
+        end
+        return Node{S,T}(0, node.threshold, left, right)
     else
         left = _convert(node.l, labels)
         right = _convert(node.r, labels)
@@ -16,8 +26,10 @@ function update_using_impurity!(
     if !node.is_leaf
         update_using_impurity!(feature_importance, node.l)
         update_using_impurity!(feature_importance, node.r)
-        feature_importance[node.feature] +=
-            node.node_impurity - node.l.node_impurity - node.r.node_impurity
+        if node.feature != 0
+            feature_importance[node.feature] +=
+                node.node_impurity - node.l.node_impurity - node.r.node_impurity
+        end
     end
     return nothing
 end
@@ -41,6 +53,7 @@ function build_tree(
     min_purity_increase=0.0;
     rng=Random.GLOBAL_RNG,
     impurity_importance::Bool=true,
+    feature_sampler=nothing,
 ) where {S,T<:AbstractFloat}
     if max_depth == -1
         max_depth = typemax(Int)
@@ -60,6 +73,7 @@ function build_tree(
         min_samples_split=Int(min_samples_split),
         min_purity_increase=Float64(min_purity_increase),
         rng,
+        feature_sampler,
     )
 
     node = _convert(t.root, labels[t.labels])
@@ -85,6 +99,7 @@ function build_forest(
     min_purity_increase=0.0;
     rng::Union{Integer,AbstractRNG}=Random.GLOBAL_RNG,
     impurity_importance::Bool=true,
+    feature_sampler=nothing,
 ) where {S,T<:AbstractFloat}
     if n_trees < 1
         throw("the number of trees must be >= 1")
@@ -123,6 +138,7 @@ function build_forest(
                 min_purity_increase;
                 rng=_rng,
                 impurity_importance,
+                feature_sampler,
             )
         end
     else # each thread gets its own seeded rng
@@ -138,6 +154,7 @@ function build_forest(
                 min_samples_split,
                 min_purity_increase;
                 impurity_importance,
+                feature_sampler,
             )
         end
     end
